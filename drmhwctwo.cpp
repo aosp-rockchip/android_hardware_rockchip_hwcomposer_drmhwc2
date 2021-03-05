@@ -351,6 +351,8 @@ HWC2::Error DrmHwcTwo::HwcDisplay::Init() {
     return error;
   }
 
+  ctx_.aclk = crtc_->get_aclk();
+
   init_success_ = true;
 
   return HWC2::Error::None;
@@ -411,6 +413,8 @@ HWC2::Error DrmHwcTwo::HwcDisplay::CheckStateAndReinit() {
     ALOGE("Failed to chose prefererd config for display %d (%d)", display, error);
     return error;
   }
+
+  ctx_.aclk = crtc_->get_aclk();
 
   init_success_ = true;
 
@@ -1001,7 +1005,7 @@ HWC2::Error DrmHwcTwo::HwcDisplay::ValidatePlanes() {
   }
 
   std::tie(ret,
-           composition_planes_) = planner_->TryHwcPolicy(layers, crtc_, static_screen_opt_);
+           composition_planes_) = planner_->TryHwcPolicy(layers, crtc_, static_screen_opt_ || force_gles_);
   if (ret){
     ALOGE("First, GLES policy fail ret=%d", ret);
     return HWC2::Error::BadConfig;
@@ -1192,6 +1196,8 @@ HWC2::Error DrmHwcTwo::HwcDisplay::SetColorTransform(const float *matrix,
                                                      int32_t hint) {
   HWC2_ALOGD_IF_VERBOSE("display-id=%" PRIu64 ", hint=%x",handle_,hint);
   // TODO: Force client composition if we get this
+  // hint definition from android_color_transform_t in system/core/libsystem/include/system/graphics-base-v1.0.h
+  force_gles_ = (hint > 0);
   unsupported(__func__, matrix, hint);
   return HWC2::Error::None;
 }
@@ -1256,12 +1262,21 @@ HWC2::Error DrmHwcTwo::HwcDisplay::SetPowerMode(int32_t mode_in) {
 
   fb_blanked = fb_blank;
 
+  if(isRK3566(resource_manager_->getSocId())){
+    ALOGD_IF(LogLevel(DBG_DEBUG),"SetPowerMode display-id=%" PRIu64 ",soc is rk3566" ,handle_);
+    DrmConnector *extend = drm_->GetConnectorFromType(HWC_DISPLAY_EXTERNAL);
+    if(extend != NULL){
+      extend->force_disconnect(dpms_value == DRM_MODE_DPMS_OFF);
+    }
+  }
+
   if(connector_){
     connector_->force_disconnect(dpms_value == DRM_MODE_DPMS_OFF);
-    drm_->DisplayChanged();
-    drm_->UpdateDisplayRoute();
-    drm_->UpdateDisplayMode();
   }
+
+  drm_->DisplayChanged();
+  drm_->UpdateDisplayRoute();
+  drm_->UpdateDisplayMode();
 
   return HWC2::Error::None;
 }
@@ -1561,6 +1576,7 @@ int DrmHwcTwo::HwcDisplay::UpdateDisplayMode(){
     connector_->set_current_mode(best_mode);
     ctx_.rel_xres = best_mode.h_display();
     ctx_.rel_yres = best_mode.v_display();
+    ctx_.dclk = best_mode.clock();
   }
   return 0;
 }
@@ -1959,6 +1975,12 @@ void DrmHwcTwo::HwcLayer::PopulateDrmLayer(hwc2_layer_t layer_id, DrmHwcLayer *d
   drmHwcLayer->acquire_fence = acquire_fence_.Release();
   drmHwcLayer->release_fence = std::move(release_fence);
 
+  drmHwcLayer->iFbWidth_ = ctx->framebuffer_width;
+  drmHwcLayer->iFbHeight_ = ctx->framebuffer_height;
+
+  drmHwcLayer->uAclk_ = ctx->aclk;
+  drmHwcLayer->uDclk_ = ctx->dclk;
+
   float w_scale = ctx->rel_xres / (float)ctx->framebuffer_width;
   float h_scale = ctx->rel_yres / (float)ctx->framebuffer_height;
 
@@ -1972,6 +1994,9 @@ void DrmHwcTwo::HwcLayer::PopulateDrmLayer(hwc2_layer_t layer_id, DrmHwcLayer *d
   drmHwcLayer->SetDisplayFrame(display_frame);
   drmHwcLayer->SetSourceCrop(source_crop_);
   drmHwcLayer->SetTransform(transform_);
+
+  // Commit mirror function
+  drmHwcLayer->SetDisplayFrameMirror(display_frame_);
 
   if(buffer_){
     drmHwcLayer->iFd_     = drmGralloc_->hwc_get_handle_primefd(buffer_);
@@ -2017,7 +2042,16 @@ void DrmHwcTwo::HwcLayer::PopulateFB(hwc2_layer_t layer_id, DrmHwcLayer *drmHwcL
     drmHwcLayer->sf_handle     = buffer_;
     drmHwcLayer->acquire_fence = acquire_fence_.Release();
     drmHwcLayer->release_fence = std::move(release_fence);
+  }else{
+    // Commit mirror function
+    drmHwcLayer->SetDisplayFrameMirror(display_frame_);
   }
+
+  drmHwcLayer->iFbWidth_ = ctx->framebuffer_width;
+  drmHwcLayer->iFbHeight_ = ctx->framebuffer_height;
+
+  drmHwcLayer->uAclk_ = ctx->aclk;
+  drmHwcLayer->uDclk_ = ctx->dclk;
 
   float w_scale = ctx->rel_xres / (float)ctx->framebuffer_width;
   float h_scale = ctx->rel_yres / (float)ctx->framebuffer_height;
@@ -2032,6 +2066,8 @@ void DrmHwcTwo::HwcLayer::PopulateFB(hwc2_layer_t layer_id, DrmHwcLayer *drmHwcL
   drmHwcLayer->SetDisplayFrame(display_frame);
   drmHwcLayer->SetSourceCrop(source_crop_);
   drmHwcLayer->SetTransform(transform_);
+
+
 
   if(buffer_){
     drmHwcLayer->iFd_     = drmGralloc_->hwc_get_handle_primefd(buffer_);
@@ -2130,6 +2166,11 @@ void DrmHwcTwo::HandleDisplayHotplug(hwc2_display_t displayid, int state) {
   auto cb = callbacks_.find(HWC2::Callback::Hotplug);
   if (cb == callbacks_.end())
     return;
+
+  if(isRK3566(resource_manager_.getSocId())){
+      ALOGD_IF(LogLevel(DBG_DEBUG),"HandleDisplayHotplug skip display-id=%" PRIu64 " state=%d",displayid,state);
+      return;
+  }
 
   auto hotplug = reinterpret_cast<HWC2_PFN_HOTPLUG>(cb->second.func);
   hotplug(cb->second.data, displayid,

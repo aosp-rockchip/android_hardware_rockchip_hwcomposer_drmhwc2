@@ -88,6 +88,16 @@ int hwc_get_string_property(const char* pcProperty,const char* default_value,cha
     return 0;
 }
 
+
+bool isRK3566(uint32_t soc_id){
+  switch(soc_id){
+    case 0x3566:
+    case 0x3566a:
+      return true;
+    default:
+      return false;
+  }
+}
 const hwc_drm_bo *DrmHwcBuffer::operator->() const {
   if (importer_ == NULL) {
     ALOGE("Access of non-existent BO");
@@ -220,6 +230,10 @@ void DrmHwcLayer::SetDisplayFrame(hwc_rect_t const &frame) {
   display_frame = frame;
 }
 
+void DrmHwcLayer::SetDisplayFrameMirror(hwc_rect_t const &frame) {
+  display_frame_mirror = frame;
+}
+
 void DrmHwcLayer::SetTransform(HWC2::Transform sf_transform) {
   switch (sf_transform) {
       case HWC2::Transform::None:
@@ -249,7 +263,7 @@ void DrmHwcLayer::SetTransform(HWC2::Transform sf_transform) {
         break;
       default:
         transform = -1;
-        ALOGE("Unknow transform 0x%x",sf_transform);
+        ALOGE_IF(LogLevel(DBG_DEBUG),"Unknow sf transform 0x%x",sf_transform);
   }
 }
 bool DrmHwcLayer::IsYuvFormat(int format){
@@ -289,6 +303,7 @@ bool DrmHwcLayer::IsScale(hwc_frect_t &source_crop, hwc_rect_t &display_frame, i
   }
   return (fHScaleMul_ != 1.0 ) || ( fVScaleMul_ != 1.0);
 }
+
 bool DrmHwcLayer::IsHdr(int usage){
   return ((usage & 0x0F000000) == HDR_ST2084_USAGE || (usage & 0x0F000000) == HDR_HLG_USAGE);
 }
@@ -303,15 +318,36 @@ bool DrmHwcLayer::IsSkipLayer(){
   return (!sf_handle ? true:false);
 }
 
+/*
+ * CLUSTER_AFBC_DECODE_MAX_RATE = 3.2
+ * (src(W*H)/dst(W*H))/(aclk/dclk) > CLUSTER_AFBC_DECODE_MAX_RATE to use GLES compose.
+ */
+#define CLUSTER_AFBC_DECODE_MAX_RATE 3.2
 bool DrmHwcLayer::IsGlesCompose(){
   // RK356x can't overlay RGBA1010102
   if(iFormat_ == HAL_PIXEL_FORMAT_RGBA_1010102)
     return true;
 
-  // RK356x can't overlay act_w % 4 != 0 afbcd layer.
+  // RK356x Cluster can't overlay act_w % 4 != 0 afbcd layer.
   if(bAfbcd_){
     int act_w = static_cast<int>(source_crop.right - source_crop.left);
     if(act_w % 4 != 0)
+      return true;
+
+    //  (src(W*H)/dst(W*H))/(aclk/dclk) > rate = 3.2, Use GLES compose
+    if((fHScaleMul_ * fVScaleMul_) / (uAclk_/uDclk_) > CLUSTER_AFBC_DECODE_MAX_RATE){
+      ALOGD_IF(LogLevel(DBG_DEBUG),"[%s]：scale too large(%f) to use GLES composer, allow_rate = %f. "
+                "fHScaleMul_ = %f, fVScaleMul_ = %f, uAclk_ = %d, uDclk_=%d ",
+                sLayerName_.c_str(),(fHScaleMul_ * fVScaleMul_) / (uAclk_/uDclk_),CLUSTER_AFBC_DECODE_MAX_RATE,
+                fHScaleMul_ ,fVScaleMul_ ,uAclk_ ,uDclk_);
+      return true;
+    }
+  }
+
+  // RK356x Esmart can't overlay act_w % 16 == 1 and fHScaleMul_ < 1.0 layer.
+  if(!bAfbcd_){
+    int act_w = static_cast<int>(source_crop.right - source_crop.left);
+    if(act_w % 16 == 1 && fHScaleMul_ < 1.0)
       return true;
   }
 

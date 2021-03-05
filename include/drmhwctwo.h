@@ -281,6 +281,7 @@ class DrmHwcTwo : public hwc2_device_t {
     bool present_finish_;
     hwc_drm_display_t ctx_;
     bool static_screen_opt_;
+    bool force_gles_;
     int fb_blanked;
 
     uint32_t frame_no_ = 0;
@@ -364,10 +365,10 @@ class DrmHwcTwo : public hwc2_device_t {
 
   static void StaticScreenOptHandler(int sig){
     if (sig == SIGALRM)
-//      if(g_ctx!=NULL){
-//        HwcDisplay &display = g_ctx->displays_.at(0);
-//        display.EntreStaticScreen(60,1);
-//    }
+      if(g_ctx!=NULL){
+        HwcDisplay &display = g_ctx->displays_.at(0);
+        display.EntreStaticScreen(60,1);
+    }
     return;
 };
 

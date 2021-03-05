@@ -47,6 +47,7 @@ namespace android {
 int hwc_get_int_property(const char* pcProperty,const char* default_value);
 bool hwc_get_bool_property(const char* pcProperty,const char* default_value);
 int hwc_get_string_property(const char* pcProperty,const char* default_value,char* retult);
+bool isRK3566(uint32_t soc_id);
 
 
 class Importer;
@@ -152,8 +153,19 @@ struct DrmHwcLayer {
   hwc_frect_t source_crop;
   hwc_rect_t display_frame;
 
+  // Commit mirror function
+  int iFbWidth_;
+  int iFbHeight_;
+  float fHScaleMulMirror_;
+  float fVScaleMulMirror_;
+  hwc_rect_t display_frame_mirror;
+
   UniqueFd acquire_fence;
   OutputFd release_fence;
+
+  // Display info
+  uint32_t uAclk_;
+  uint32_t uDclk_;
 
   // Frame info
   uint32_t uId_;
@@ -203,6 +215,7 @@ struct DrmHwcLayer {
   void SetTransform(HWC2::Transform sf_transform);
   void SetSourceCrop(hwc_frect_t const &crop);
   void SetDisplayFrame(hwc_rect_t const &frame);
+  void SetDisplayFrameMirror(hwc_rect_t const &frame);
 
   buffer_handle_t get_usable_handle() const {
     return handle.get() != NULL ? handle.get() : sf_handle;

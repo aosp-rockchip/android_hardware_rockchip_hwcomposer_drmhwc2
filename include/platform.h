@@ -35,7 +35,7 @@ class DrmDevice;
 class DrmPlanes;
 
 typedef struct tagPlaneGroup{
-  bool     b_reserved;
+  bool     bReserved;
   bool     bUse;
   uint32_t zpos;
   uint32_t possible_crtcs;
@@ -88,6 +88,13 @@ typedef struct tagPlaneGroup{
   }
 
   bool acquire(uint32_t crtc_mask){
+    if(possible_crtcs == crtc_mask){
+      set_current_possible_crtcs(crtc_mask);
+      enable_possible_crtc = crtc_mask;
+      disable_possible_crtc = crtc_mask;
+      return true;
+    }
+
     if(!(possible_crtcs & crtc_mask))
       return false;
 
@@ -158,7 +165,7 @@ class Planner {
     virtual int MatchPlane(std::vector<DrmCompositionPlane> *composition_planes,
                      std::vector<PlaneGroup *> &plane_groups,
                      DrmCompositionPlane::Type type, DrmCrtc *crtc,
-                     std::pair<int, std::vector<DrmHwcLayer*>> layers, int *zpos, bool match_best) = 0;
+                     std::pair<int, std::vector<DrmHwcLayer*>> layers, int zpos, bool match_best) = 0;
   };
 
   // Creates a planner instance with platform-specific planning stages

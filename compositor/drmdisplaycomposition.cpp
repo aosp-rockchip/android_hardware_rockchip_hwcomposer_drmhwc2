@@ -128,6 +128,8 @@ int DrmDisplayComposition::DisableUnusedPlanes() {
 
   std::vector<PlaneGroup*> plane_groups = drm_->GetPlaneGroups();
 
+  int soc_id = crtc()->get_soc_id();
+
   //loop plane groups.
   for (std::vector<PlaneGroup *> ::const_iterator iter = plane_groups.begin();
      iter != plane_groups.end(); ++iter) {
@@ -140,10 +142,14 @@ int DrmDisplayComposition::DisableUnusedPlanes() {
     }else if((*iter)->acquire(crtc_mask)){
         disable_plane = true;
     }
+
+    if(isRK3566(soc_id))
+      disable_plane = true;
+
     if(release_plane || disable_plane){
         for(std::vector<DrmPlane*> ::const_iterator iter_plane=(*iter)->planes.begin();
               !(*iter)->planes.empty() && iter_plane != (*iter)->planes.end(); ++iter_plane) {
-              if ((*iter_plane)->GetCrtcSupported(*crtc()) && !(*iter_plane)->is_use()) {
+              if (!(*iter_plane)->is_use()) {
                   ALOGD_IF(LogLevel(DBG_DEBUG),"DisableUnusedPlanes plane_groups plane id=%d %s",
                             (*iter_plane)->id(),release_plane ? "release_necessary_cnt plane" : "");
                   AddPlaneDisable(*iter_plane);
